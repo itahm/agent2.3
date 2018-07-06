@@ -32,7 +32,6 @@ import com.itahm.table.Config;
 import com.itahm.table.Critical;
 import com.itahm.table.Device;
 import com.itahm.table.Monitor;
-import com.itahm.table.Position;
 import com.itahm.table.Profile;
 import com.itahm.table.Table;
 import com.itahm.enterprise.Enterprise;
@@ -54,7 +53,7 @@ public class Agent {
 	
 	/* Configuration */
 	
-	public final static String VERSION = "2.0.3.2";
+	public final static String VERSION = "2.0.3.3";
 	private final static long DAY1 = 24 *60 *60 *1000;
 	private final static String DATA = "data";
 	public final static int MAX_TIMEOUT = 10000;
@@ -74,14 +73,17 @@ public class Agent {
 	public static File root;
 	private static File dataRoot;
 	
-	public Agent(int tcp) throws IOException {
+	public Agent(File path, int tcp) throws IOException {
 		System.out.format("ITAhM Agent version %s ready.\n", VERSION);
+		
+		root = path;
+		dataRoot = new File(root, DATA);
 		
 		tables.put(Table.Name.CONFIG, new Config(dataRoot));
 		tables.put(Table.Name.ACCOUNT, new Account(dataRoot));
 		tables.put(Table.Name.PROFILE, new Profile(dataRoot));
 		tables.put(Table.Name.DEVICE, new Device(dataRoot));
-		tables.put(Table.Name.POSITION, new Position(dataRoot));
+		tables.put(Table.Name.POSITION, new Table(dataRoot, Table.Name.POSITION));
 		tables.put(Table.Name.MONITOR, new Monitor(dataRoot));
 		tables.put(Table.Name.ICON, new Table(dataRoot, Table.Name.ICON));
 		tables.put(Table.Name.CRITICAL, new Critical(dataRoot));
@@ -102,7 +104,7 @@ public class Agent {
 		server = new HTTPServer(this, tcp);
 	}
 	
-	public static void initialize() throws IOException {
+	private static void initialize() throws IOException {
 		try {
 			snmp = new SNMPAgent(dataRoot);
 			icmp = new ICMPAgent();
@@ -221,13 +223,29 @@ public class Agent {
 		return validIFType.contains(type);
 	}
 	
+	// shutdown, system
 	public static void log(String ip, String message, Log.Type type, boolean status, boolean broadcast) {
 		log.write(ip, message, type.toString().toLowerCase(), status, broadcast);
+	}
+	
+	// critical
+	public static void log(JSONObject data, boolean broadcast) {		
+		log.write(data);
+		
+		if (broadcast) {
+			sendEvent(data);
+		}
 	}
 	
 	public static void sendEvent(String message) {
 		if (config.has("sms") && config.getBoolean("sms")) {
 			enterprise.sendEvent(message);
+		}
+	}
+	
+	public static void sendEvent(JSONObject message) {
+		if (config.has("sms") && config.getBoolean("sms")) {
+			enterprise.sendEvent("");
 		}
 	}
 	
@@ -275,7 +293,7 @@ public class Agent {
 	/**
 	 * 
 	 * @param ip
-	 * @param id search로부터 오면 nulle, monitor로부터 오면 device id
+	 * @param id search로부터 오면 null, monitor로부터 오면 device id
 	 */
 	public static void testSNMPNode(String ip, String id) {
 		snmp.testNode(ip, id);
@@ -289,8 +307,30 @@ public class Agent {
 		icmp.testNode(ip);
 	}
 	
-	public static void resetCritical(String ip, JSONObject critical) {
-		snmp.resetCritical(ip, critical);
+	/**
+	 * user가 일괄설정으로 임계설정을 변경하였을때
+	 * @param ip
+	 * @param resource
+	 * @param rate
+	 * @param overwrite
+	 * @throws IOException 
+	 */
+	public static void setCritical(String ip, String resource, int rate, boolean overwrite) throws IOException {
+		snmp.setCritical(ip, resource, rate, overwrite);
+	}
+	
+	/**
+	 * user가 node의 임계설정을 변경하였을때
+	 * @param ip
+	 * @param critical
+	 * @throws IOException 
+	 */
+	public static void setCritical(String ip, JSONObject critical) throws IOException {
+		snmp.setCritical(ip, critical);
+	}
+	
+	public static long getRequestTimer() {
+		return config.getLong("requestTimer");
 	}
 	
 	public static boolean addUSM(JSONObject usm) {
@@ -347,10 +387,6 @@ public class Agent {
 	
 	public static String report(long start, long end) throws IOException {
 		return log.read(start, end);
-	}
-	
-	public static void setCritical(String target, String resource, int rate, boolean overwrite) {
-		snmp.setCritical(target, resource, rate, overwrite);
 	}
 	
 	public static void resetResponse(String ip) {
@@ -502,7 +538,7 @@ public class Agent {
 		
 		int tcp = 2014;
 		Calendar c = Calendar.getInstance();
-		File path = null;
+		File path = null, root, dataRoot;
 		
 		for (int i=0, _i=args.length; i<_i; i++) {
 			if (args[i].indexOf("-") != 0) {
@@ -580,13 +616,13 @@ public class Agent {
 		
 		System.out.format("Agent loading...\n");
 		
-		final Agent agent = new Agent(tcp);
+		final Agent agent = new Agent(root, tcp);
 		
 		System.out.println("ITAhM agent has been successfully started.");
 		
 		final Timer timer = new Timer();
 		
-		timer.schedule(new TimerTask() {	
+		timer.schedule(new TimerTask() {
 			
 			@Override
 			public void run() {

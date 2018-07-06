@@ -78,7 +78,7 @@ public class SNMPNode extends Node {
 		agent.setRequestOID(super.pdu);
 	}
 	
-	private void initialize(SNMPAgent agent, String ip, JSONObject criticalCondition, JSONObject ifSpeed) throws UnknownHostException {
+	private void initialize(SNMPAgent agent, String ip, JSONObject critical, JSONObject ifSpeed) throws UnknownHostException {
 		this.agent = agent;
 		this.ip = ip;
 		
@@ -91,7 +91,12 @@ public class SNMPNode extends Node {
 			new File(nodeRoot, database.toString()).mkdir();
 		}
 		
-		setCritical(criticalCondition);
+		this.critical = new Critical(critical) {
+			@Override
+			public void onCritical(boolean isCritical, String resource, String index, long rate, String description) {
+				agent.onCritical(ip, resource, index, isCritical, rate, description);
+			}};
+		
 		setInterface(ifSpeed);
 	}
 	
@@ -129,7 +134,7 @@ public class SNMPNode extends Node {
 				max = new TopTable.Value(value, value, index);
 			}
 		}
-	
+		
 		if (max != null) {
 			this.agent.onSubmitTop(this.ip, SNMPAgent.Resource.PROCESSOR, max);
 		}
@@ -139,9 +144,7 @@ public class SNMPNode extends Node {
 		JSONObject data;
 		TopTable.Value max = null;
 		TopTable.Value maxRate = null;
-		long value;
-		long capacity;
-		long tmpValue;
+		long value, capacity, tmpValue;
 		int type;
 		
 		for(String index: super.hrStorageEntry.keySet()) {
@@ -211,7 +214,7 @@ public class SNMPNode extends Node {
 		JSONObject
 			data, lastData;
 		long 
-			value,
+			iValue, oValue,
 			rate,
 			capacity,
 			duration;
@@ -231,7 +234,8 @@ public class SNMPNode extends Node {
 			
 			lastData = lastEntry.getJSONObject(index);
 			
-			if (!data.has("ifAdminStatus") || data.getInt("ifAdminStatus") != 1) {
+			if (!data.has("ifAdminStatus") || data.getInt("ifAdminStatus") != 1
+				|| !data.has("ifOperStatus") || data.getInt("ifOperStatus") != 1) {
 				continue;
 			}
 			
@@ -251,7 +255,7 @@ public class SNMPNode extends Node {
 			}
 			
 			if (data.has("ifInErrors") && lastData.has("ifInErrors")) {
-				value = data.getInt("ifInErrors") - lastData.getInt("ifInErrors");
+				long value = data.getInt("ifInErrors") - lastData.getInt("ifInErrors");
 				
 				data.put("ifInErrors", value);
 				
@@ -263,7 +267,7 @@ public class SNMPNode extends Node {
 			}
 			
 			if (data.has("ifOutErrors") && lastData.has("ifOutErrors")) {
-				value = data.getInt("ifOutErrors") - lastData.getInt("ifOutErrors");
+				long value = data.getInt("ifOutErrors") - lastData.getInt("ifOutErrors");
 				
 				data.put("ifOutErrors", value);
 				
@@ -280,72 +284,76 @@ public class SNMPNode extends Node {
 				
 			duration = data.getLong("timestamp") - lastData.getLong("timestamp");
 			
-			value = -1;
+			iValue = -1;
 			
 			if (data.has("ifHCInOctets") && lastData.has("ifHCInOctets")) {
-				value = data.getLong("ifHCInOctets") - lastData.getLong("ifHCInOctets");
+				iValue = data.getLong("ifHCInOctets") - lastData.getLong("ifHCInOctets");
 			}
 			
 			if (data.has("ifInOctets") && lastData.has("ifInOctets")) {
-				value = Math.max(value, data.getLong("ifInOctets") - lastData.getLong("ifInOctets"));
+				iValue = Math.max(iValue, data.getLong("ifInOctets") - lastData.getLong("ifInOctets"));
 			}
 			
-			if (value  >= 0) {
-				value = value *8000 / duration;
+			if (iValue  > -1) {
+				iValue = iValue *8000 / duration;
 				
-				data.put("ifInBPS", value);
+				data.put("ifInBPS", iValue);
 				
-				this.putData(Rolling.IFINOCTETS, index, value);
+				this.putData(Rolling.IFINOCTETS, index, iValue);
 				
-				rate = value*100L / capacity;
+				rate = iValue*100L / capacity;
 				
 				if (max == null ||
-					max.getValue() < value ||
-					max.getValue() == value && max.getRate() < rate) {
-					max = new TopTable.Value(value, rate, index);
+					max.getValue() < iValue ||
+					max.getValue() == iValue && max.getRate() < rate) {
+					max = new TopTable.Value(iValue, rate, index);
 				}
 				
 				if (maxRate == null ||
 					maxRate.getRate() < rate ||
-					maxRate.getRate() == rate && maxRate.getValue() < value) {
-					maxRate = new TopTable.Value(value, rate, index);
+					maxRate.getRate() == rate && maxRate.getValue() < iValue) {
+					maxRate = new TopTable.Value(iValue, rate, index);
 				}
 			}
 			
-			value = -1;
+			oValue = -1;
 			
 			if (data.has("ifHCOutOctets") && lastData.has("ifHCOutOctets")) {
-				value = data.getLong("ifHCOutOctets") - lastData.getLong("ifHCOutOctets");
+				oValue = data.getLong("ifHCOutOctets") - lastData.getLong("ifHCOutOctets");
 			}
 			
 			if (data.has("ifOutOctets") && lastData.has("ifOutOctets")) {
-				value = Math.max(value, data.getLong("ifOutOctets") - lastData.getLong("ifOutOctets"));
+				oValue = Math.max(oValue, data.getLong("ifOutOctets") - lastData.getLong("ifOutOctets"));
 			}
 			
-			if (value >= 0) {
-				value = value *8000 / duration;
+			if (oValue > -1) {
+				oValue = oValue *8000 / duration;
 				
-				data.put("ifOutBPS", value);
+				data.put("ifOutBPS", oValue);
 				
-				this.putData(Rolling.IFOUTOCTETS, index, value);
+				this.putData(Rolling.IFOUTOCTETS, index, oValue);
 				
-				rate = value*100L / capacity;
+				rate = oValue*100L / capacity;
 				
 				if (max == null ||
-					max.getValue() < value ||
-					max.getValue() == value && max.getRate() < rate) {
-					max = new TopTable.Value(value, rate, index);
+					max.getValue() < oValue ||
+					max.getValue() == oValue && max.getRate() < rate) {
+					max = new TopTable.Value(oValue, rate, index);
 				}
 				
 				if (maxRate == null ||
 					maxRate.getRate() < rate ||
-					maxRate.getRate() == rate && maxRate.getValue() < value) {
-					maxRate = new TopTable.Value(value, rate, index);
+					maxRate.getRate() == rate && maxRate.getValue() < oValue) {
+					maxRate = new TopTable.Value(oValue, rate, index);
 				}
 			}
 			
-			if (max != null && this.critical != null) {
-				this.critical.analyze(Critical.Resource.THROUGHPUT, index, capacity, max.getValue());
+			if (this.critical != null) {
+				long value = Math.max(iValue, oValue);
+				
+				if (value > -1) {					
+					this.critical.analyze(Critical.Resource.THROUGHPUT, index, capacity, value);
+				}
 			}
 		}
 		
@@ -427,17 +435,12 @@ public class SNMPNode extends Node {
 		return null;
 	}
 	
-	public void setCritical(JSONObject criticalCondition) {
-		if (criticalCondition == null) {
-			this.critical = null;
+	public void setCritical(JSONObject critical) {
+		if (critical == null) {
+			this.critical.clear();
 		}
 		else {
-			this.critical = new Critical(criticalCondition) {
-				
-				@Override
-				public void onCritical(boolean isCritical, Resource resource, String index, long rate) {
-					agent.onCritical(ip, isCritical, String.format("%s.%s %d%% %s.", resource, index, rate, isCritical? "임계 초과": "정상"));
-				}};
+			this.critical.reset(critical);
 		}
 	}
 	

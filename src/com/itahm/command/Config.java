@@ -27,10 +27,6 @@ public class Config implements Command {
 				Agent.config(key, data.getJSONObject("value"));
 				
 				break;
-			case "display":
-				Agent.config(key, data.getString("value"));
-				
-				break;
 			case "sms":
 			case "menu":
 				Agent.config(key, data.getBoolean("value"));
@@ -47,6 +43,10 @@ public class Config implements Command {
 				Agent.config(key, iftype);
 			
 				Agent.setValidIFType(iftype);
+				break;
+			case "requestTimer":
+				Agent.config(key, data.getLong("value"));
+				
 				break;
 			default:
 				Agent.config(key, data.getString("value"));

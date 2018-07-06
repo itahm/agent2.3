@@ -31,6 +31,14 @@ public class Config extends Table {
 			save = true;
 		}
 		
+		try {
+			super.table.getLong("requestTimer");
+		}
+		catch (JSONException jsone) {
+			super.table.put("requestTimer", 10000);
+		
+			save = true;
+		}
 		
 		if (save) {
 			super.save();

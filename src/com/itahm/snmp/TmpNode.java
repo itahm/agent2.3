@@ -20,7 +20,6 @@ import org.snmp4j.smi.OID;
 import org.snmp4j.smi.OctetString;
 import org.snmp4j.smi.UdpAddress;
 import org.snmp4j.smi.VariableBinding;
-import org.snmp4j.transport.DefaultUdpTransportMapping;
 
 abstract public class TmpNode implements ResponseListener {
 
@@ -121,30 +120,5 @@ abstract public class TmpNode implements ResponseListener {
 		
 		test();
 	}
-	
-	public static void main(String[] args) throws IOException {
-		Snmp snmp = new Snmp(new DefaultUdpTransportMapping());
-		
-		snmp.listen();
-		
-		TmpNode node = new TmpNode(snmp, args[0], 10000) {
 
-			@Override
-			public void onSuccess(String profileName) {
-				System.out.println("success profile name is "+ profileName);
-			}
-
-			@Override
-			public void onFailure(int status) {
-				System.out.println("falure");
-			}};
-			
-		node.addProfile("test", Integer.parseInt(args[2]), new OctetString(args[1]), SnmpConstants.version2c);
-		
-		node.test();
-		
-		System.in.read();
-			
-		snmp.close();
-	}
 }

@@ -133,7 +133,9 @@ public class Batch {
 					freeSpace = MAX * root.getUsableSpace() / root.getTotalSpace();
 					
 					if (freeSpace < lastFreeSpace && freeSpace < CRITICAL) {
-						Agent.log("ITAhM", String.format("저장 여유공간 %d%%", freeSpace), Log.Type.SYSTEM, false, true);
+						Agent.log(new JSONObject().
+							put("origin", "system").
+							put("message", String.format("저장소 여유공간이 %d%% 남았습니다.", freeSpace)), true);
 					}
 					
 					lastFreeSpace = freeSpace;

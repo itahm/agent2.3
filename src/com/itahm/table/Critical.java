@@ -13,7 +13,7 @@ public class Critical extends Table {
 	}
 	
 	public JSONObject put(String ip, JSONObject critical) throws IOException {
-		Agent.resetCritical(ip, critical);
+		Agent.setCritical(ip, critical);
 		
 		return super.put(ip, critical);
 	}

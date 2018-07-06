@@ -38,7 +38,7 @@ public class TestNode extends TmpNode {
 			this.id = ((Device)deviceTable).createID(false);
 			
 			try {
-				deviceTable.put(id,
+				deviceTable.put(this.id,
 					new JSONObject()
 						.put("ip", super.ip)
 						.put("name", "")
@@ -53,7 +53,7 @@ public class TestNode extends TmpNode {
 		Agent.removeICMPNode(super.ip);
 		
 		monitorTable.getJSONObject().put(super.ip, new JSONObject()
-			.put("id", id)
+			.put("id", this.id)
 			.put("protocol", "snmp")
 			.put("ip", super.ip)
 			.put("profile", profileName)
@@ -66,13 +66,28 @@ public class TestNode extends TmpNode {
 			Agent.syslog(Util.EToString(ioe));
 		}
 		
-		Agent.log(ip, String.format("%s SNMP 등록 성공.", super.ip), Log.Type.SYSTEM, true, false);
+		Agent.log(new JSONObject()
+			.put("origin", "test")
+			.put("id", this.id)
+			.put("ip", super.ip)
+			.put("test", true)
+			.put("protocol", "snmp")
+			.put("profile", profileName)
+			.put("message", String.format("%s SNMP 등록 성공", super.ip))
+			, false);
 	}
 
 	@Override
 	public void onFailure(int status) {
 		if (this.id != null) {
-			Agent.log(ip, String.format("%s SNMP 등록 실패. status[%d]", super.ip, status), Log.Type.SHUTDOWN, false, false);
+			Agent.log(new JSONObject()
+				.put("origin", "test")
+				.put("ip", super.ip)
+				.put("test", false)
+				.put("protocol", "snmp")
+				.put("status", status)
+				.put("message", String.format("%s SNMP 등록 실패", super.ip))
+				, false);
 		}
 	}
 }

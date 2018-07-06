@@ -41,7 +41,6 @@ import com.itahm.util.Util;
 
 public class SNMPAgent extends Snmp implements Closeable {
 	
-	private final static long REQUEST_INTERVAL = 10000;
 	private boolean isClosed = false;
 	private DataCleaner cleaner;
 	
@@ -154,7 +153,9 @@ public class SNMPAgent extends Snmp implements Closeable {
 	
 	public boolean  registerNode(String ip, String profileName) {
 		if (Agent.limit > 0 && this.nodeList.size() >= Agent.limit) {
-			Agent.log("ITAhM", String.format("라이선스 초과 %d", Agent.limit), Log.Type.SYSTEM, false, true);
+			Agent.log(new JSONObject().
+				put("origin", "system").
+				put("message", String.format("라이선스 수량 %d 을(를) 초과하였습니다.  %d", Agent.limit)), true);
 			
 			return false;
 		}
@@ -163,8 +164,6 @@ public class SNMPAgent extends Snmp implements Closeable {
 				addNode(ip, profileName);
 			} catch (IOException ioe) {
 				Agent.syslog(Util.EToString(ioe));
-				
-				Agent.log(ip, "시스템에 심각한 오류가 있습니다.", Log.Type.SYSTEM, false, false);
 			}
 			
 			return true;
@@ -345,17 +344,40 @@ public class SNMPAgent extends Snmp implements Closeable {
 		node.resetResponse();
 	}
 	
-	public void resetCritical(String ip, JSONObject critical) {
+	/**
+	 * User가 명시적으로 설정
+	 * @param ip
+	 * @param critical
+	 * @throws IOException 
+	 */
+	public void setCritical(String ip, JSONObject critical) throws IOException {
 		SNMPNode node = this.nodeList.get(ip);
 		
 		if (node == null) {
 			return;
 		}
-			
+		
+		JSONObject monitor = this.monitorTable.getJSONObject(ip);
+		
+		if (monitor == null) {
+			return;
+		}
+		
+		monitor.put("critical", false);
+		
+		this.monitorTable.save();
+		
 		node.setCritical(critical);
 	}
 	
-	private void setCritical(JSONObject critical, String index, int rate, String description, boolean overwrite) {
+	/**
+	 * @param critical
+	 * @param index
+	 * @param rate
+	 * @param description
+	 * @param overwrite
+	 */
+	private void parseCritical(JSONObject critical, String index, int rate, String description, boolean overwrite) {
 		if (critical.has(index) && !overwrite) {
 			return;
 		}
@@ -371,11 +393,20 @@ public class SNMPAgent extends Snmp implements Closeable {
 		critical.put(index, value);
 	}
 	
-	private void setCritical(JSONObject data, String resource, JSONObject critical, int rate, boolean overwrite) {
+	/**
+	 * @param data
+	 * @param critical
+	 * @param resource
+	 * @param rate
+	 * @param overwrite
+	 */
+	private void parseResourceCritical(JSONObject data, JSONObject critical, String resource, int rate, boolean overwrite) {
+		JSONObject rCritical = critical.has(resource)? critical.getJSONObject(resource): new JSONObject();
+		
 		switch(resource) {
 		case "processor":
 			if (data.has("hrProcessorEntry")) {
-				setCritical(critical, "0", rate, null, overwrite);
+				parseCritical(rCritical, "0", rate, null, overwrite);
 			}
 			
 			break;
@@ -391,7 +422,7 @@ public class SNMPAgent extends Snmp implements Closeable {
 						continue;
 					}
 					
-					setCritical(critical, (String)index, rate, 
+					parseCritical(rCritical, (String)index, rate, 
 						strgData.has("hrStorageDescr")? strgData.getString("hrStorageDescr"): null, overwrite);
 				}
 			}
@@ -409,7 +440,7 @@ public class SNMPAgent extends Snmp implements Closeable {
 						continue;
 					}
 					
-					setCritical(critical, (String)index, rate, 
+					parseCritical(rCritical, (String)index, rate, 
 						strgData.has("hrStorageDescr")? strgData.getString("hrStorageDescr"): null, overwrite);
 				}
 			}
@@ -423,7 +454,7 @@ public class SNMPAgent extends Snmp implements Closeable {
 				for (Object index: entry.keySet()) {
 					ifData = entry.getJSONObject((String)index);
 					
-					setCritical(critical, (String)index, rate, 
+					parseCritical(rCritical, (String)index, rate, 
 						ifData.has("ifName")? ifData.getString("ifName"):
 						ifData.has("ifAlias")? ifData.getString("ifAlias"):null, overwrite);
 				}
@@ -431,81 +462,111 @@ public class SNMPAgent extends Snmp implements Closeable {
 			
 			break;
 		}
+		
+		if (rCritical.keySet().size() > 0) {
+			critical.put(resource, rCritical);
+		}
 	}
 	
-	private void setCritical(JSONObject data, JSONObject criticalCondition, String resource, int rate, boolean overwrite) {
+	/**
+	 * 
+	 * @param criticalData 전체 critical 테이블 데이터
+	 * @param ip
+	 * @param resource
+	 * @param rate 0 이면 삭제
+	 * @param overwrite
+	 */
+	private void setNodeCritical(JSONObject criticalData, String ip, String resource, int rate, boolean overwrite) {
+		SNMPNode node = this.nodeList.get(ip);
 		JSONObject critical;
 		
-		if (criticalCondition.has(resource)) {
-			critical = criticalCondition.getJSONObject(resource);
-		}
-		else {
-			criticalCondition.put(resource, critical = new JSONObject());
-		}
-		
-		setCritical(data, resource, critical, rate, overwrite);
-	}
-	
-	private void setCritical(SNMPNode node, JSONObject criticalCondition, String resource, int rate, boolean overwrite) {
-		final JSONObject data = node.getData();
-		
-		if (data == null) {
-			return;
-		}
-		
-		if (resource == null) {
-			setCritical(data, criticalCondition, "processor", rate, overwrite);
-			setCritical(data, criticalCondition, "memory", rate, overwrite);
-			setCritical(data, criticalCondition, "storage", rate, overwrite);
-			setCritical(data, criticalCondition, "throughput", rate, overwrite);
-		}
-		else {
-			setCritical(data, criticalCondition, resource, rate, overwrite);
-		}
-		
-		node.setCritical(criticalCondition);
-	}
-	
-	public void setCritical(String target, String resource, int rate, boolean overwrite) {
-		JSONObject criticalData = Agent.getTable(Table.Name.CRITICAL).getJSONObject();
-		JSONObject criticalCondition;
-		
-		if (target == null) {	
-			for (String ip : this.nodeList.keySet()) {
-				target = ip;
+		if (rate == 0) { // 삭제
+			if (resource == null) {
+				criticalData.remove(ip);
 				
-				if (criticalData.has(target)) {
-					criticalCondition = criticalData.getJSONObject(target);
+				node.setCritical(null);
+			}
+			else if (criticalData.has(ip)){
+				critical = criticalData.getJSONObject(ip);
+				
+				critical.remove(resource);
+				
+				if (critical.keySet().size() == 0) {
+					criticalData.remove(ip);
+					
+					node.setCritical(null);
 				}
 				else {
-					criticalData.put(target, criticalCondition = new JSONObject());
+					node.setCritical(critical);
 				}
-				
-				setCritical(this.nodeList.get(ip), criticalCondition, resource, rate, overwrite);
 			}
 		}
-		else {
-			final SNMPNode node = this.nodeList.get(target);
+		else { // 수정
+			if (criticalData.has(ip)) {
+				critical = criticalData.getJSONObject(ip);
+			}
+			else {
+				criticalData.put(ip, critical = new JSONObject());
+			}
 			
-			if (node != null) {
-				if (criticalData.has(target)) {
-					criticalCondition = criticalData.getJSONObject(target);
-				}
-				else {
-					criticalData.put(target, criticalCondition = new JSONObject());
-				}
-				
-				setCritical(node, criticalCondition, resource, rate, overwrite);
+			final JSONObject data = node.getData();
+			
+			if (data == null) {
+				return;
 			}
+			
+			if (resource == null) {
+				parseResourceCritical(data, critical, "processor", rate, overwrite);
+				parseResourceCritical(data, critical, "memory", rate, overwrite);
+				parseResourceCritical(data, critical, "storage", rate, overwrite);
+				parseResourceCritical(data, critical, "throughput", rate, overwrite);
+			}
+			else {
+				parseResourceCritical(data, critical, resource, rate, overwrite);
+			}
+			
+			node.setCritical(critical.keySet().size() > 0? critical: null);
 		}
 	}
 	
+	/**
+	 * Global.setCritical
+	 * @param target
+	 * @param resource
+	 * @param rate
+	 * @param overwrite
+	 * @throws IOException
+	 */
+	public void setCritical(String ip, String resource, int rate, boolean overwrite) throws IOException {
+		Table criticalTable = Agent.getTable(Table.Name.CRITICAL),
+			monitorTable = Agent.getTable(Table.Name.MONITOR);
+		JSONObject criticalData = criticalTable.getJSONObject(),
+			monitorData = monitorTable.getJSONObject();
+		
+		if (ip == null) {
+			for (String key : this.nodeList.keySet()) {
+				setNodeCritical(criticalData, key, resource, rate, overwrite);
+				
+				monitorData.getJSONObject(key).put("critical", false);
+			}
+		}
+		else if (this.nodeList.get(ip) != null) {
+			setNodeCritical(criticalData, ip, resource, rate, overwrite);
+			
+			monitorData.getJSONObject(ip).put("critical", false);
+		}
+		
+		criticalTable.save();
+		monitorTable.save();
+	}
+	
+	/**
+	 * 
+	 * @param ip
+	 * @param id search로부터 호출되면 null
+	 */
 	public void testNode(final String ip, String id) {
 		if (this.nodeList.containsKey(ip)) {
-			if(id != null) {
-				Agent.log(ip, "이미 등록된 노드 입니다.", Log.Type.SYSTEM, false, false);
-			}
-			
 			return;
 		}
 		
@@ -673,9 +734,7 @@ public class SNMPAgent extends Snmp implements Closeable {
 			return;
 		}
 		
-		if (monitor.getBoolean("shutdown")) {	
-			JSONObject nodeData = node.getData();
-			
+		if (monitor.getBoolean("shutdown")) {
 			monitor.put("shutdown", false);
 			
 			try {
@@ -684,9 +743,12 @@ public class SNMPAgent extends Snmp implements Closeable {
 				Agent.syslog(Util.EToString(ioe));
 			}
 			
-			Agent.log(ip,
-				(nodeData != null && nodeData.has("sysName"))? String.format("%s [%s] 정상.", ip, nodeData.getString("sysName")): String.format("%s 정상.", ip),
-						Log.Type.SHUTDOWN, true, true);
+			Agent.log(new JSONObject()
+				.put("origin", "shutdown")
+				.put("ip", ip)
+				.put("shutdown", false)
+				.put("protocol", "snmp")
+				.put("message", String.format("%s SNMP 응답 정상", ip)), true);
 		}
 	}
 	
@@ -707,8 +769,6 @@ public class SNMPAgent extends Snmp implements Closeable {
 		}
 		
 		if (!monitor.getBoolean("shutdown")) {
-			JSONObject nodeData = node.getData();
-			
 			monitor.put("shutdown", true);
 			
 			try {
@@ -717,9 +777,12 @@ public class SNMPAgent extends Snmp implements Closeable {
 				Agent.syslog(Util.EToString(ioe));
 			}
 			
-			Agent.log(ip,
-				(nodeData != null && nodeData.has("sysName"))? String.format("%s [%s] 응답 없음.", ip, nodeData.getString("sysName")): String.format("%s 응답 없음.", ip),
-				Log.Type.SHUTDOWN, false, true);
+			Agent.log(new JSONObject()
+				.put("origin", "shutdown")
+				.put("ip", ip)
+				.put("shutdown", true)
+				.put("protocol", "snmp")
+				.put("message", String.format("%s SNMP 응답 없음", ip)), true);
 		}
 		
 		sendRequest(node);
@@ -739,33 +802,78 @@ public class SNMPAgent extends Snmp implements Closeable {
 		sendNextRequest(node);
 	}
 	
-	public void onCritical(String ip, boolean critical, String message) {
+	public void onCritical(String ip, String resource, String index, boolean isCritical, long rate, String description) {
 		SNMPNode node = this.nodeList.get(ip);
 		
 		if (node == null) {
 			return;
 		}
 		
-		JSONObject monitor = this.monitorTable.getJSONObject(ip);
+		JSONObject critical = this.criticalTable.getJSONObject(ip);
 		
-		if (monitor == null) {
+		if (critical == null || !critical.has(resource)) {
 			return;
 		}
 		
-		JSONObject nodeData = node.getData();
+		JSONObject value = critical.getJSONObject(resource);
 		
-		monitor.put("critical", critical);
+		if (!value.has(index)) {
+			return;
+		}
+		
+		value = value.getJSONObject(index);
+		
+		value.put("critical", isCritical);
+		
+		boolean b = false;
+		
+		if (isCritical) {
+			b = true;
+		}
+		else {
+			// TODO 여기에서 sync 안해도 되는지?
+			loop: for (Object key : critical.keySet()) {
+				value = critical.getJSONObject((String)key);
+				for (Object key2 : value.keySet()) {
+					if (value.getJSONObject((String)key2).getBoolean("critical")) {
+						b = true;
+						
+						break loop;
+					}
+				}
+			}
+		}
+		
+		JSONObject monitor = this.monitorTable.getJSONObject(ip);
+		
+		if (monitor.getBoolean("critical") != b) {
+			monitor.put("critical", b);
+			
+			try {
+				this.monitorTable.save();
+			} catch (IOException ioe) {
+				Agent.syslog(Util.EToString(ioe));
+			}
+		}
 		
 		try {
-			this.monitorTable.save();
+			this.criticalTable.save();
 		} catch (IOException ioe) {
 			Agent.syslog(Util.EToString(ioe));
 		}
 		
-		Agent.log(ip,
-			nodeData.has("sysName")? String.format("%s [%s] %s", ip, nodeData.getString("sysName"), message): String.format("%s %s", ip, message),
-			Log.Type.CRITICAL, !critical, true);
-		
+		Agent.log(new JSONObject()
+			.put("origin", "critical")
+			.put("ip", ip)
+			.put("resource", resource)
+			.put("rIndex", index) // event의 index가 자동생성되므로 "index" 는 쓰면 안됨
+			.put("critical", isCritical)
+			.put("rate", rate)
+			.put("message", String.format("%s [%s]%s %s 임계 %s",
+				ip, resource, description == null? "": (" "+ description),
+				rate > -1? String.format("%d%%", rate): "설정해제",
+				isCritical? "초과": "정상")), true);
+	
 	}
 	
 	public void onSubmitTop(String ip, Resource resource, TopTable.Value value) {
@@ -789,7 +897,7 @@ public class SNMPAgent extends Snmp implements Closeable {
 					sendRequest(node);
 				}
 				
-			}, REQUEST_INTERVAL);
+			}, Agent.getRequestTimer());
 	}
 	
 	private final void sendRequest(SNMPNode node) {

@@ -5,132 +5,246 @@ import java.util.Map;
 
 import com.itahm.json.JSONException;
 import com.itahm.json.JSONObject;
-import com.itahm.util.Util;
 
 abstract public class Critical {
 
 	public enum Resource {
-		PROCESSOR("Processor load"),
-		MEMORY("Physical memory"),
-		STORAGE("Storage usage"),
-		THROUGHPUT("Interface throughput");
-		
-		private final String alias;
-		
-		private Resource(String alias) {
-			this.alias = alias;
-		}
+		PROCESSOR,
+		MEMORY,
+		STORAGE,
+		THROUGHPUT;
 		
 		@Override
 		public String toString() {
-			return this.alias;
+			return super.toString().toLowerCase();
 		}
 	}
 	
 	public static byte NONE = 0x00;
-	public static byte CRITIC = 0x01;
+	public static byte CRITICAL = 0x01;
 	public static byte DIFF = 0x10;
 	
-	private final Map<Resource, Map<String, Data>> mapping = new HashMap<>();
+	private final Map<Resource, Map<String, Value>> mapping = new HashMap<>();
 	
-	public Critical(JSONObject criticData) {
-		JSONObject list;
-		Resource resource;
-		Map<String, Data> rscData;
+	public Critical(JSONObject critical) {
+		if (critical != null) {
+			parse(critical);
+		}
+	}
+	
+	private void parse(JSONObject critical) {
+		Map<String, Value> map;
+		JSONObject jsono, value;
 		
-		for (Object key : criticData.keySet()) {			
-			try {
-				resource = Resource.valueOf(((String)key).toUpperCase());
-			}
-			catch (IllegalArgumentException iae) {
-				continue;
-			}
-			
-			list = criticData.getJSONObject((String)key);
-			
-			for (Object index: list.keySet()) {
-				if (!mapping.containsKey(resource)) {
-					mapping.put(resource, rscData = new HashMap<>());
-				}
-				else {
-					rscData = mapping.get(resource);
-				}
+		for (Resource resource: Resource.values()) {
+			if (critical.has(resource.toString())) {
+				mapping.put(resource, map = new HashMap<>()); 
 				
-				try {
-					rscData.put((String)index, new Data(list.getJSONObject((String)index).getInt("limit")));
-				}
-				catch(JSONException jsone) {
-					Agent.syslog(Util.EToString(jsone));
+				jsono = critical.getJSONObject(resource.toString());
+				for (Object index : jsono.keySet()) {
+					value = jsono.getJSONObject((String)index);
+					
+					value.put("critical", false);
+					
+					try {
+						map.put((String)index, new Value(value));
+					}
+					catch(JSONException jsone) {
+						jsone.printStackTrace();
+					}
 				}
 			}
 		}
 	}
 	
-	public void analyze(Resource resource, String index, long max, long current) {
-		Map<String, Data> rscData = this.mapping.get(resource);
-		
-		if (rscData == null) {
+	public void analyze(Resource resource, String index, long max, long value) {
+		if (resource.equals(Resource.PROCESSOR)) {
+			analyze(index, max, value);
+			
 			return;
 		}
 		
-		Data data = rscData.get(index);
+		Map<String, Value> map = this.mapping.get(resource);
+		
+		if (map == null) {
+			return;
+		}
+		
+		Value data = map.get(index);
 		
 		if (data == null) {
-			if (resource.equals(Resource.PROCESSOR) && rscData.get("0") != null) {
-				rscData.put(index, data = rscData.get("0").clone());
-			}
-			else {
+			return;
+		}
+		
+		long rate = value *100 / max;
+		
+		if (data.test(rate)) {
+			onCritical(data.isCritical(), resource.toString(), index, rate, data.getDescription());
+		}
+	}
+	
+	private void analyze(String index, long max, long value) {
+		Map<String, Value> map = this.mapping.get(Resource.PROCESSOR);
+		
+		if (map == null) {
+			return;
+		}
+		
+		Value data = map.get(index);
+		
+		if (data == null) {
+			if (map.get("0") == null) {
 				return;
 			}
+			else {
+				map.put(index, data = map.get("0").clone());
+			}
 		}
 		
-		long rate = current *100 / max;
-		byte flag = data.test(rate);
+		long rate = value *100 / max;
 		
-		if (isDiff(flag)) {
-			onCritical(isCritical(flag), resource, index, rate);
+		if (data.test(rate)) {
+			for (String i : map.keySet()) {
+				if ("0".equals(i) || index.equals(i)) {
+					continue;
+				}
+				
+				if (map.get(i).isCritical()) {
+					return;
+				}
+			}
+			
+			onCritical(data.isCritical(), Resource.PROCESSOR.toString(), "0", rate, null);
 		}
 	}
 	
-	public static boolean isCritical(byte flag) {
-		return (flag & CRITIC) == CRITIC;
+	public void clear() {
+		this.mapping.clear();
 	}
 	
-	public static boolean isDiff(byte flag) {
-		return (flag & DIFF) == DIFF;
+	public void reset(JSONObject critical) {
+		this.mapping.clear();
+		
+		parse(critical);
+	}
+	/*
+	public void clear() {
+		Map<String, Value> map;
+		
+		for (Resource resource : this.mapping.keySet()) {
+			map = this.mapping.get(resource);
+			
+			if (resource.equals(Resource.PROCESSOR)) {
+				for (String index : map.keySet()) {
+					if ("0".equals(index)) {
+						continue;
+					}
+					
+					if (remove(map.get(index), Resource.PROCESSOR, "0")) {
+						break;
+					}
+				}
+			}
+			else {
+				for (String index : map.keySet()) {
+					remove(map.get(index), resource, index);
+				}
+			}
+		}
+		
+		this.mapping.clear();
 	}
 	
-	class Data {
-
+	public void reset(JSONObject critical) {
+		Map<String, Value> map;
+		JSONObject jsono;
+		
+		for (Resource resource : this.mapping.keySet()) {
+			map = this.mapping.get(resource);
+			jsono = critical.has(resource.toString())? critical.getJSONObject(resource.toString()): null;
+			
+			if (resource.equals(Resource.PROCESSOR)) {
+				if (jsono == null) {
+					for (String index : map.keySet()) {
+						if ("0".equals(index)) {
+							continue;
+						}
+						
+						if (remove(map.get(index), Resource.PROCESSOR, "0")) {
+							break;
+						}
+					}
+				}
+			}
+			else {
+				for (String index : map.keySet()) {
+					if (jsono == null || !jsono.has(index)) {
+						remove(map.get(index), resource, index);
+					}
+				}
+			}
+		}
+		
+		this.mapping.clear();
+		
+		parse(critical);
+	}
+	
+	private boolean remove(Value value, Resource resource, String index) {
+		if (!value.isCritical()) {
+			return false;
+		}
+		
+		onCritical(false, resource.toString(), index, -1, value.getDescription());
+		
+		return true;
+	}
+	*/
+	class Value {
+		
 		private final int limit;
-		private Boolean status = null;
+		private boolean critical = false;
+		private String description = null;
 		
-		public Data(int limit) {
+		private Value(int limit) {
 			this.limit = limit;
 		}
 		
-		public byte test(long current) {
-			boolean isCritic = this.limit <= current;
+		public Value(JSONObject value) throws JSONException {
+			this.limit = value.getInt("limit");
+			this.critical = value.getBoolean("critical");
 			
-			if (this.status == null) {
-				this.status = isCritic;
+			if (value.has("description")) {
+				this.description = value.getString("description");
+			}
+		}
+		
+		public boolean isCritical() {
+			return this.critical;
+		}
+		
+		public String getDescription() {	
+			return this.description;
+		}
+		
+		private boolean test(long rate) {
+			boolean critical = this.limit <= rate;
+			
+			if (this.critical == critical) { // 상태가 같으면 none
+				return false;
 			}
 			
-			if (this.status == isCritic) {
-				return NONE;
-			}
+			this.critical = critical; // 바뀐 상태 입력
 			
-			this.status = isCritic;
-			
-			return (byte)(DIFF | (isCritic? CRITIC : NONE));
+			return true;
 		}
 		
 		@Override
-		public Data clone() {
-			return new Data(this.limit);
+		public Value clone() {
+			return new Value(this.limit);
 		}
 		
 	}
 	
-	abstract public void onCritical(boolean isCritical, Resource resource, String index, long rate);
+	abstract public void onCritical(boolean isCritical, String resource, String index, long rate, String description);
 }

@@ -76,9 +76,9 @@ public class Device extends Table {
 				}
 			}
 		}
-		else {
-			Agent.getTable(Name.MONITOR).put(id, null);
-			Agent.getTable(Name.CRITICAL).put(id, null);
+		else if (device.has("ip")){
+			// monitor에서 critical을 함께 삭제함
+			Agent.getTable(Name.MONITOR).put(device.getString("ip"), null);
 		}
 	}
 	

@@ -46,6 +46,30 @@ public class Log {
 		return new String(sysLog, StandardCharsets.UTF_8.name());
 	}
 	
+	public void write(JSONObject log) {
+		log.put("date", Calendar.getInstance().getTimeInMillis());
+		
+		try {
+			this.dailyFile.write(log);
+		} catch (IOException ioe) {
+			sysLog(Util.EToString(ioe));
+		}
+		
+		synchronized(this.waiter) {
+			Response response = Response.getInstance(Response.Status.OK, log.toString());
+			
+			for (Request request : this.waiter) {
+				try {
+					HTTPServer.sendResponse(request, response);
+				} catch (IOException ioe) {
+					sysLog(Util.EToString(ioe));
+				}
+			}
+			
+			waiter.clear();
+		}
+	}
+	
 	public void write(String ip, String message, String type, boolean status, boolean broadcast) {
 		JSONObject logData = new JSONObject();
 		
